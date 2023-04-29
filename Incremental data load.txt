@@ -1,0 +1,4 @@
+COPY screening.edd_customer_staging from 
+'s3://boost-datalake-mongo-present/screening/edd_customer/parquet/FROM_DATE_PARAMETER/'
+IAM_ROLE 'arn:aws:iam::470461430817:role/boost-datalake-redshift'
+FORMAT AS PARQUET;

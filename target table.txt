@@ -1,0 +1,116 @@
+INSERT INTO screening.edd_customer(
+    id
+    ,cddstatus
+    ,createdby
+    ,createddate
+    ,currentapprovallevel
+    ,customerid
+    ,customername
+    ,eddflag
+    ,eddquestionnaireflag
+    ,eddrequiredapprovallevel
+    ,idnumber
+    ,industry
+    ,modifiedby
+    ,modifieddate
+    ,nationality
+    ,occupation
+    ,occupationdescription
+    ,risklevel
+    ,riskscanid
+    ,riskscore
+    ,screeningid
+    ,version
+    ,__last_sync_ts
+    ,record_flag
+    ,cddredoinfo_createdby
+    ,cddredoinfo_createdchannel
+    ,cddredoinfo_createddate
+    ,cddredoinfo_createdremark
+    ,cddredoinfo_previouscddid
+    ,cddredoinfo_previouscddstatus
+    ,cddredoinfo_previousscreeningid
+    ,eddapprovaldetails_approvallevel
+    ,eddapprovaldetails_approvalname
+    ,eddapprovaldetails_approvalremark
+    ,eddapprovaldetails_approvalresourcegroup
+    ,eddapprovaldetails_approvalstatus
+    ,eddapprovaldetails_datecreated
+    ,eddquestionnairedetails_questionid
+    ,eddquestionnairedetails_optioncodelist_remark
+    ,eddquestionnairedetails_optioncodelist_optioncode
+    ,eddquestionnairedetails_optioncodelist_eddquestionnaireimageso_container
+    ,eddquestionnairedetails_optioncodelist_eddquestionnaireimageso_name
+    ,eddquestionnairedetails_optioncodelist_eddquestionnaireimageso_url
+    ,eddreasondetails_reason
+    ,eddreasondetails_subreason
+)
+(SELECT
+    id
+    ,cddstatus
+    ,createdby
+    ,createddate:: TIMESTAMPTZ as createddate
+    ,currentapprovallevel
+    ,customerid
+    ,customername
+    ,eddflag
+    ,eddquestionnaireflag
+    ,eddrequiredapprovallevel
+    ,idnumber
+    ,industry
+    ,modifiedby
+    ,modifieddate:: TIMESTAMPTZ as modifieddate
+    ,nationality
+    ,occupation
+    ,occupationdescription
+    ,risklevel
+    ,riskscanid
+    ,riskscore
+    ,screeningid
+    ,version
+    ,__last_sync_ts:: TIMESTAMPTZ
+    ,record_flag
+    ,cddredoinfo_createdby
+    ,cddredoinfo_createdchannel
+    ,cddredoinfo_createddate:: TIMESTAMPTZ as cddredoinfo_createddate
+    ,cddredoinfo_createdremark
+    ,cddredoinfo_previouscddid
+    ,cddredoinfo_previouscddstatus
+    ,cddredoinfo_previousscreeningid
+    ,eddapprovaldetails_approvallevel
+    ,eddapprovaldetails_approvalname
+    ,eddapprovaldetails_approvalremark
+    ,eddapprovaldetails_approvalresourcegroup
+    ,eddapprovaldetails_approvalstatus
+    ,eddapprovaldetails_datecreated:: TIMESTAMPTZ as eddapprovaldetails_datecreated
+    ,eddquestionnairedetails_questionid
+    ,eddquestionnairedetails_optioncodelist_remark
+    ,eddquestionnairedetails_optioncodelist_optioncode
+    ,eddquestionnairedetails_optioncodelist_eddquestionnaireimageso_container
+    ,eddquestionnairedetails_optioncodelist_eddquestionnaireimageso_name
+    ,eddquestionnairedetails_optioncodelist_eddquestionnaireimageso_url
+    ,eddreasondetails_reason
+    ,eddreasondetails_subreason
+    ,getdate()::TIMESTAMPTZ::date as process_date
+FROM screening.edd_customer_staging
+);
+----------
+/* data being spool out using dateCreated */ 
+----------
+INSERT INTO bde_ops.etl_job_count
+        (
+            jobname, datecreated, dateprocess, __last_sync_ts, staging_count
+        )
+        (
+        SELECT 
+            'screening.edd_customer' as jobname
+            ,dateCreated::TIMESTAMPTZ::date as datecreated
+            ,convert_timezone('MYT', getdate())::TIMESTAMPTZ::date as dateprocess
+            ,__last_sync_ts::TIMESTAMPTZ::date as __last_sync_ts
+            ,count(*) as staging_count
+        FROM 
+            screening.edd_customer_staging
+        GROUP BY 
+             jobname, dateCreated, dateprocess, __last_sync_ts
+        );
+drop table screening.edd_customer_staging;

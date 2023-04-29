@@ -1,0 +1,466 @@
+# DMS doc Processor
+# Arguments:
+# Run from console:
+#   Key                  Value
+#   --------------------------------------------------------------------------------------------------------------------------------
+#   --input_dir          s3://boost-datalake-mongo-land/screening/screening_customer/
+#   --output_dir_raw     s3://boost-datalake-mongo-raw/screening/screening_customer/
+#   --output_dir_present s3://boost-datalake-mongo-present/screening/screening_customer/
+#
+#   Running from gluespark submit
+#   /aws-glue-libs/bin/gluesparksubmit screening.screening_customer.py
+#   --JOB_NAME TEST_JOB
+#   --input_dir          s3://boost-datalake-mongo-land/screening/screening_customer/
+#   --output_dir_raw     s3://boost-datalake-mongo-raw/screening/screening_customer/
+#   --output_dir_present s3://boost-datalake-mongo-present/screening/screening_customer/
+
+#/*----------------------------------------------------------------------*
+  #Program:      DMS Data Extraction
+  #Purpose:      This program performs the Load from DMS Doc to various doc format
+  #              such as JSON, CSV and Parquet in S3 buckets
+  #Author(s):    Bunchhean Chhiv
+  #Comments :    Initial - 20230328
+#*----------------------------------------------------------------------*/
+
+import sys
+from awsglue.transforms import *
+from awsglue.dynamicframe import DynamicFrame
+from awsglue.utils import getResolvedOptions
+from pyspark.context import SparkContext
+from awsglue.context import GlueContext
+from awsglue.job import Job
+from pyspark.sql.functions import split
+from pyspark.sql.functions import regexp_replace
+from pyspark.sql.functions import from_json, col, explode, explode_outer
+from pyspark.sql.types import StructType, StringType, IntegerType, StructField, ArrayType, LongType, DoubleType
+from pyspark.sql import functions as F
+from datetime import datetime
+
+## @params: [JOB_NAME, input_dir,  output_dir_raw, output_dir_present]
+args = getResolvedOptions(sys.argv, ['JOB_NAME', 'input_dir', 'output_dir_present'])
+
+sc = SparkContext()
+glueContext = GlueContext(sc)
+spark = glueContext.spark_session
+job =  Job(glueContext)
+job.init(args['JOB_NAME'], args)
+
+input_dir = args['input_dir']
+#output_dir_raw = args['output_dir_raw']
+output_dir_present = args['output_dir_present']
+
+# Please ensure that spark schema is similiar to mongodb schema defined in file:
+# boost-datalake/dbschema/vault/schema_ascii_table/exchange_upiAccounts.text
+
+screening_screening_customer_schema =  StructType([
+
+    StructField("_id", StructType([
+        StructField("$oid", StringType(), True)
+    ]), True),
+    StructField("blocked", StringType(), True),
+    StructField("cddRiskLevel",StringType(), True),
+    StructField("cddStatus",StringType(), True),
+    StructField("cddType",StringType(), True),
+    StructField("channel",StringType(), True),
+    StructField("checkedBy",StringType(), True),
+    StructField("checkedDate",StringType(), True),    
+
+    StructField("contactInfo", StructType([
+            StructField("addressCorrespondence",StringType(),True),
+            StructField("addressPerId",StringType(),True),
+            StructField("email",StringType(),True),
+            StructField("mailingAddress",StringType(),True),
+            StructField("msisdn",StringType(),True),
+            StructField("residentialAddress",StringType(),True)
+        ]), True),
+
+    StructField("createdBy",StringType(), True),
+    StructField("createdDate",StringType(), True),
+    StructField("customerId",StringType(), True),
+    StructField("eddFlag",StringType(), True),
+    
+    StructField("ekycRedoInfo", StructType([
+            StructField("createdBy",StringType(),True),
+            StructField("createdChannel",StringType(),True),
+            StructField("createdDate",StringType(),True),
+            StructField("createdRemark",StringType(),True),
+            StructField("previousCddId",StringType(),True),
+            StructField("previousCddStatus",StringType(),True),
+            StructField("previousScreeningId",StringType(),True),
+            StructField("previousScreeningReferenceNo",StringType(),True),
+            StructField("previousScreeningStatus",StringType(),True)
+        ]), True),
+
+    StructField("informedConsent",StringType(), True),
+    StructField("kycType",StringType(), True),
+    StructField("modifiedBy",StringType(), True),
+    StructField("modifiedDate",StringType(), True),
+    StructField("platform",StringType(), True),
+    StructField("purposeOfTransaction",StringType(), True),
+    StructField("referenceNo",StringType(), True),
+
+    StructField("rejection", StructType([
+            StructField("remark",StringType(),True),
+            StructField("reasons", ArrayType(StringType(), True),True),
+        ]), True),
+
+    StructField("remark", StringType(),True),
+    StructField("revision",StringType(), True),
+
+    StructField("riskProfilingInfo", StructType([
+            StructField("adverseMedia",StringType(),True),
+            StructField("nextReviewDate",StringType(),True),
+            StructField("pep",StringType(),True),
+            StructField("riskLevel",StringType(),True),
+            StructField("riskScore",StringType(),True)
+        ]), True),
+
+    StructField("sanctionCheckStatus", StringType(), True),
+
+    StructField("sanctionChecks", ArrayType(
+        StructType([
+            StructField("caseId", StringType(), True),
+            StructField("dateOfBirth", StringType(), True),
+            StructField("encryptedCaseId", StringType(), True),
+            StructField("fullName", StringType(), True),
+            StructField("idNumber", StringType(), True),
+            StructField("idType", StringType(), True),
+            StructField("nationality", StringType(), True),
+            StructField("sanctionStatus", StringType(), True),
+            StructField("screeningStatus", StringType(), True)
+        ]), True),True),
+
+    StructField("screeningAnalysis", StructType([
+            StructField("components",ArrayType(
+                StructType([
+                    StructField("code", StringType(), True),
+                    StructField("label", StringType(), True),
+                    StructField("method", StringType(), True),
+                    StructField("tool", StringType(), True),
+                    StructField("data", StructType([
+                        StructField("mrz", StringType(), True),
+                        StructField("viz", StringType(), True)
+                    ]), True)
+                ]),True),True),
+            StructField("faceInfo", StructType([
+                StructField("confidence", StringType(), True),
+                StructField("externalImageId", StringType(), True),
+                StructField("faceId", StringType(), True),
+                StructField("imageId", StringType(), True)
+            ]),True),
+            StructField("faceSimilarityInfoList",ArrayType(
+                StructType([
+                    StructField("customerId", StringType(), True),
+                    StructField("matchedDate", StringType(), True),
+                    StructField("screeningId", StringType(), True),
+                    StructField("similarity", StringType(), True),
+                    StructField("faceInfo", StructType([
+                        StructField("confidence", StringType(), True),
+                        StructField("externalImageId", StringType(), True),
+                        StructField("faceId", StringType(), True),
+                        StructField("imageId", StringType(), True)
+                    ]), True)
+                ]),True),True),
+            StructField("identityDocumentBackImageSO", StructType([
+                StructField("container", StringType(), True),
+                StructField("name", StringType(), True),
+                StructField("url", StringType(), True)
+            ]),True),
+            StructField("identityDocumentFrontImageSO", StructType([
+                StructField("container", StringType(), True),
+                StructField("name", StringType(), True),
+                StructField("url", StringType(), True)
+            ]),True),
+            StructField("livenessVideoS3", StructType([
+                StructField("bucketName", StringType(), True),
+                StructField("objectKey", StringType(), True)
+            ]),True),
+            StructField("onfidoData", StructType([
+                StructField("applicantId", StringType(), True),
+                StructField("applicationId", StringType(), True),
+                StructField("onfidoChecks", ArrayType(
+                    StructType([
+                        StructField("applicantId", StringType(), True),
+                        StructField("createdAt", StringType(), True),
+                        StructField("href", StringType(), True),
+                        StructField("id", StringType(), True),
+                        StructField("resultsUri", StringType(), True),
+                        StructField("status", StringType(), True),
+                        StructField("reportIds", ArrayType(
+                            StructField("0", StringType(), True),
+                            StructField("1", StringType(), True)
+                        ), True),
+                ]),True),True),
+                StructField("onfidoReports",ArrayType(
+                    StructType([
+                        StructField("checkId", StringType(), True),
+                        StructField("createdAt", StringType(), True),
+                        StructField("id", StringType(), True),
+                        StructField("localReportId", StringType(), True),
+                        StructField("name", StringType(), True),
+                        StructField("status", StringType(), True),
+                        StructField("uri", StringType(), True)
+                ]),True),True),
+            ]),True),
+            StructField("processes",StructType([
+                StructField("createChecks", StringType(), True),
+                StructField("documentValidation", StringType(), True),
+                StructField("faceSimilarity", StringType(), True),
+                StructField("fetchData", StringType(), True),
+                StructField("fetchReports", StringType(), True),
+                StructField("sanctionCheck", StringType(), True)
+            ]),True),
+            StructField("scoreCards", ArrayType(
+                StructType([
+                    StructField("name", StringType(), True),
+                    StructField("status", StringType(), True)
+                ]),True),True),
+            StructField("selfieImageS3",StructType([
+                StructField("bucketName", StringType(), True),
+                StructField("objectKey", StringType(), True)
+            ]),True),
+            StructField("verificationProvider",StringType(),True)
+    ]), True),
+
+    StructField("status",StringType(), True),
+    StructField("subStatus",StringType(), True),
+
+    StructField("userInfo", StructType([
+            StructField("age",StringType(),True),
+            StructField("currentFullName",StringType(),True),
+            StructField("currentIdNumber",StringType(),True),
+            StructField("dateOfBirth",StringType(),True),
+            StructField("expiryDate",StringType(),True),
+            StructField("extractedFullName",StringType(),True),
+            StructField("extractedIdNumber",StringType(),True),
+            StructField("extractedIdType",StringType(),True),
+            StructField("firstName",StringType(),True),
+            StructField("fullName",StringType(),True),
+            StructField("gender",StringType(),True),
+            StructField("idNumber",StringType(),True),
+            StructField("idType",StringType(),True),
+            StructField("industry",StringType(),True),
+            StructField("issueCountryCode",StringType(),True),
+            StructField("issueStateCode",StringType(),True),
+            StructField("lastName",StringType(),True),
+            StructField("monthToExpire",StringType(),True),
+            StructField("nationality",StringType(),True),
+            StructField("nationalityCode",StringType(),True),
+            StructField("occupation",StringType(),True),
+            StructField("occupationDescription",StringType(),True)
+    ]), True),
+
+    StructField("version",StringType(), True),
+    StructField("walletInfo",StructType([
+        StructField("currentWalletType",StringType(), True),
+        StructField("requestDate",StringType(), True)
+    ]),True),
+])
+
+# Read the file directly from S3 Bucket
+readdf_dyf = glueContext.create_dynamic_frame_from_options(connection_type = "s3", connection_options = {"paths": [ input_dir ] }, format = "csv", transformation_ctx = "readdf_dyf")
+
+# Convert document to DataFrame
+readdf = readdf_dyf.toDF()
+jsondf = readdf.select(from_json("col3",screening_screening_customer_schema).alias("screening_screening_customer"),col("col1").alias("__last_sync_ts"),col("col0").alias("record_flag"))                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               3",screening_screening_customer_schema).alias("screening_screening_customer"),col("col1").alias("__last_sync_ts"),col("col0").alias("record_flag"))
+jsondf_raw = jsondf.select(col("screening_screening_customer.*"),col("__last_sync_ts"),col("record_flag"))
+
+#Mask the data
+# Dump JSON before any transformation
+#raw_data_dyn_frame = DynamicFrame.fromDF(jsondf_raw, glueContext, "raw_data_dyn_frame")
+#datasink_json = glueContext.write_dynamic_frame.from_options(frame = raw_data_dyn_frame, connection_type = "s3", connection_options = {"path": output_dir_raw}, format = "json", transformation_ctx = "datasink_json")
+
+# Denest the oid field to top level
+expanded_df = jsondf_raw.select(col("_id.$oid").alias("ID"),\
+                                col('*'),
+                                col("contactInfo.addressCorrespondence").alias("contactInfo_addressCorrespondence"),
+                                col("contactInfo.addressPerId").alias("contactInfo_addressPerId"),
+                                col("contactInfo.email").alias("contactInfo_email"),
+                                col("contactInfo.mailingAddress").alias("contactInfo_mailingAddress"),
+                                col("contactInfo.msisdn").alias("contactInfo_msisdn"),
+                                col("contactInfo.residentialAddress").alias("contactInfo_residentialAddress"),
+                                col("ekycRedoInfo.createdBy").alias("ekycRedoInfo_createdBy"),
+                                col("ekycRedoInfo.createdChannel").alias("ekycRedoInfo_createdChannel"),
+                                col("ekycRedoInfo.createdDate").alias("ekycRedoInfo_createdDate"),
+                                col("ekycRedoInfo.createdRemark").alias("ekycRedoInfo_createdRemark"),
+                                col("ekycRedoInfo.previousCddId").alias("ekycRedoInfo_previousCddId"),
+                                col("ekycRedoInfo.previousCddStatus").alias("ekycRedoInfo_previousCddStatus"),
+                                col("ekycRedoInfo.previousScreeningId").alias("ekycRedoInfo_previousScreeningId"),
+                                col("ekycRedoInfo.previousScreeningReferenceNo").alias("ekycRedoInfo_previousScreeningReferenceNo"),
+                                col("ekycRedoInfo.previousScreeningStatus").alias("ekycRedoInfo_previousScreeningStatus"),
+                                col("riskProfilingInfo.adverseMedia").alias("riskProfilingInfo_adverseMedia"),
+                                col("riskProfilingInfo.nextReviewDate").alias("riskProfilingInfo_nextReviewDate"),
+                                col("riskProfilingInfo.pep").alias("riskProfilingInfo_pep"),
+                                col("riskProfilingInfo.riskLevel").alias("riskProfilingInfo_riskLevel"),
+                                col("riskProfilingInfo.riskScore").alias("riskProfilingInfo_riskScore"),
+                                col("userInfo.age").alias("userInfo_age"),
+                                col("userInfo.currentFullName").alias("userInfo_currentFullName"),
+                                col("userInfo.currentIdNumber").alias("userInfo_currentIdNumber"),
+                                col("userInfo.dateOfBirth").alias("userInfo_dateOfBirth"),
+                                col("userInfo.expiryDate").alias("userInfo_expiryDate"),
+                                col("userInfo.extractedFullName").alias("userInfo_extractedFullName"),
+                                col("userInfo.extractedIdNumber").alias("userInfo_extractedIdNumber"),
+                                col("userInfo.extractedIdType").alias("userInfo_extractedIdType"),
+                                col("userInfo.firstName").alias("userInfo_firstName"),
+                                col("userInfo.fullName").alias("userInfo_fullName"),
+                                col("userInfo.gender").alias("userInfo_gender"),
+                                col("userInfo.idNumber").alias("userInfo_idNumber"),
+                                col("userInfo.idType").alias("userInfo_idType"),
+                                col("userInfo.industry").alias("userInfo_industry"),
+                                col("userInfo.issueCountryCode").alias("userInfo_issueCountryCode"),
+                                col("userInfo.issueStateCode").alias("userInfo_issueStateCode"),
+                                col("userInfo.lastName").alias("userInfo_lastName"),
+                                col("userInfo.monthToExpire").alias("userInfo_monthToExpire"),
+                                col("userInfo.nationality").alias("userInfo_nationality"),
+                                col("userInfo.nationalityCode").alias("userInfo_nationalityCode"),
+                                col("userInfo.occupation").alias("userInfo_occupation"),
+                                col("userInfo.occupationDescription").alias("userInfo_occupationDescription"),
+                                col("walletInfo.currentWalletType").alias("walletInfo_currentWalletType"),
+                                col("walletInfo.requestDate").alias("walletInfo_requestDate"),
+                                col("rejection.remark").alias("rejection_remark"),
+                                col("rejection.reasons").alias("rejection_reasons")
+                                ).drop("_id","contactInfo","ekycRedoInfo","riskProfilingInfo","userInfo","walletInfo","rejection")
+#Unnest the cddRedoInfo object
+explode_with_rejection_reasons = expanded_df.withColumn('rejection_reasons',explode_outer('rejection_reasons'))
+
+explode_with_sanctionChecks = explode_with_rejection_reasons.withColumn('sanctionChecks',explode_outer('sanctionChecks'))
+
+expanded_df3 = explode_with_sanctionChecks.select(
+              col("*"),
+              col("sanctionChecks.caseId").alias("sanctionChecks_caseId"),
+              col("sanctionChecks.dateOfBirth").alias("sanctionChecks_dateOfBirth"),
+              col("sanctionChecks.encryptedCaseId").alias("sanctionChecks_encryptedCaseId"),
+              col("sanctionChecks.fullName").alias("sanctionChecks_fullName"),
+              col("sanctionChecks.idNumber").alias("sanctionChecks_idNumber"),
+              col("sanctionChecks.idType").alias("sanctionChecks_idType"),
+              col("sanctionChecks.nationality").alias("sanctionChecks_nationality"),
+              col("sanctionChecks.sanctionStatus").alias("sanctionChecks_sanctionStatus"),
+              col("sanctionChecks.screeningStatus").alias("sanctionChecks_screeningStatus")
+              ).drop("sanctionChecks")
+
+expanded_df4 = expanded_df3.select(
+              col("*"),
+              col("screeningAnalysis.components").alias("screeningAnalysis_components"),
+              col("screeningAnalysis.faceInfo").alias("screeningAnalysis_faceInfo"),
+              col("screeningAnalysis.faceSimilarityInfoList").alias("screeningAnalysis_faceSimilarityInfoList"),
+              col("screeningAnalysis.identityDocumentBackImageSO").alias("screeningAnalysis_identityDocumentBackImageSO"),
+              col("screeningAnalysis.identityDocumentFrontImageSO").alias("screeningAnalysis_identityDocumentFrontImageSO"),
+              col("screeningAnalysis.livenessVideoS3").alias("screeningAnalysis_livenessVideoS3"),
+              col("screeningAnalysis.onfidoData").alias("screeningAnalysis_onfidoData"),
+              col("screeningAnalysis.processes").alias("screeningAnalysis_processes"),
+              col("screeningAnalysis.scoreCards").alias("screeningAnalysis_scoreCards"),
+              col("screeningAnalysis.selfieImageS3").alias("screeningAnalysis_selfieImageS3"),
+              col("screeningAnalysis.verificationProvider").alias("screeningAnalysis_verificationProvider")
+              ).drop("screeningAnalysis")
+
+explode_with_SAcomponents = expanded_df4.withColumn('screeningAnalysis_components',explode_outer('screeningAnalysis_components'))
+
+expanded_df5 = explode_with_SAcomponents.select(
+              col("*"),
+              col("screeningAnalysis_components.code").alias("screeningAnalysis_components_code"),
+              col("screeningAnalysis_components.label").alias("screeningAnalysis_components_label"),
+              col("screeningAnalysis_components.method").alias("screeningAnalysis_components_method"),
+              col("screeningAnalysis_components.tool").alias("screeningAnalysis_components_tool"),
+              col("screeningAnalysis_components.data").alias("screeningAnalysis_components_data"),
+              col("screeningAnalysis_components_data.mrz").alias("screeningAnalysis_components_data_mrz"),
+              col("screeningAnalysis_components_data.viz").alias("screeningAnalysis_components_data_viz"),
+              col("screeningAnalysis_faceInfo.confidence").alias("screeningAnalysis_faceInfo_confidence"),
+              col("screeningAnalysis_faceInfo.externalImageId").alias("screeningAnalysis_faceInfo_externalImageId"),
+              col("screeningAnalysis_faceInfo.faceId").alias("screeningAnalysis_faceInfo_faceId"),
+              col("screeningAnalysis_faceInfo.imageId").alias("screeningAnalysis_faceInfo_imageId"),
+              col("screeningAnalysis_identityDocumentBackImageSO.container").alias("screeningAnalysis_identityDocumentBackImageSO_container"),
+              col("screeningAnalysis_identityDocumentBackImageSO.name").alias("screeningAnalysis_identityDocumentBackImageSO_name"),
+              col("screeningAnalysis_identityDocumentBackImageSO.url").alias("screeningAnalysis_identityDocumentBackImageSO_url"),
+              col("screeningAnalysis_identityDocumentFrontImageSO.container").alias("screeningAnalysis_identityDocumentFrontImageSO_container"),
+              col("screeningAnalysis_identityDocumentFrontImageSO.name").alias("screeningAnalysis_identityDocumentFrontImageSO_name"),
+              col("screeningAnalysis_identityDocumentFrontImageSO.url").alias("screeningAnalysis_identityDocumentFrontImageSO_url"),
+              col("screeningAnalysis_livenessVideoS3.bucketName").alias("screeningAnalysis_livenessVideoS3_bucketName"),
+              col("screeningAnalysis_livenessVideoS3.objectKey").alias("screeningAnalysis_livenessVideoS3_objectKey"),
+              col("screeningAnalysis_processes.createChecks").alias("screeningAnalysis_processes_createChecks"),
+              col("screeningAnalysis_processes.documentValidation").alias("screeningAnalysis_processes_documentValidation"),
+              col("screeningAnalysis_processes.faceSimilarity").alias("screeningAnalysis_processes_faceSimilarity"),
+              col("screeningAnalysis_processes.fetchData").alias("screeningAnalysis_processes_fetchData"),
+              col("screeningAnalysis_processes.fetchReports").alias("screeningAnalysis_processes_fetchReports"),
+              col("screeningAnalysis_processes.sanctionCheck").alias("screeningAnalysis_processes_sanctionCheck"),
+              col("screeningAnalysis_selfieImageS3.bucketName").alias("screeningAnalysis_selfieImageS3_bucketName"),
+              col("screeningAnalysis_selfieImageS3.objectKey").alias("screeningAnalysis_selfieImageS3_objectKey")
+              ).drop("screeningAnalysis_components","screeningAnalysis_components_data","screeningAnalysis_faceInfo","screeningAnalysis_identityDocumentBackImageSO","screeningAnalysis_identityDocumentFrontImageSO","screeningAnalysis_livenessVideoS3","screeningAnalysis_processes","screeningAnalysis_selfieImageS3")
+
+explode_with_SAscoreCards = expanded_df5.withColumn('screeningAnalysis_scoreCards',explode_outer('screeningAnalysis_scoreCards'))
+
+expanded_df6 = explode_with_SAscoreCards.select(
+              col("*"),
+              col("screeningAnalysis_scoreCards.name").alias("screeningAnalysis_scoreCards_name"),
+              col("screeningAnalysis_scoreCards.status").alias("screeningAnalysis_scoreCards_status"),
+              ).drop("screeningAnalysis_scoreCards")
+
+expanded_df7 = expanded_df6.select(
+              col("*"),
+              col("screeningAnalysis_onfidoData.applicantId").alias("screeningAnalysis_onfidoData_applicantId"),
+              col("screeningAnalysis_onfidoData.applicationId").alias("screeningAnalysis_onfidoData_applicationId"),
+              col("screeningAnalysis_onfidoData.onfidoChecks").alias("screeningAnalysis_onfidoData_onfidoChecks"),
+              col("screeningAnalysis_onfidoData.onfidoReports").alias("screeningAnalysis_onfidoData_onfidoReports")
+              ).drop("screeningAnalysis_onfidoData")
+
+explode_with_SAonfidoReports = expanded_df7.withColumn('screeningAnalysis_onfidoData_onfidoReports',explode_outer('screeningAnalysis_onfidoData_onfidoReports'))
+
+expanded_df8 = explode_with_SAonfidoReports.select(
+              col("*"),
+              col("screeningAnalysis_onfidoData_onfidoReports.checkId").alias("screeningAnalysis_onfidoData_onfidoReports_checkId"),
+              col("screeningAnalysis_onfidoData_onfidoReports.createdAt").alias("screeningAnalysis_onfidoData_onfidoReports_createdAt"),
+              col("screeningAnalysis_onfidoData_onfidoReports.id").alias("screeningAnalysis_onfidoData_onfidoReports_id"),
+              col("screeningAnalysis_onfidoData_onfidoReports.localReportId").alias("screeningAnalysis_onfidoData_onfidoReports_localReportId"),
+              col("screeningAnalysis_onfidoData_onfidoReports.name").alias("screeningAnalysis_onfidoData_onfidoReports_name"),
+              col("screeningAnalysis_onfidoData_onfidoReports.status").alias("screeningAnalysis_onfidoData_onfidoReports_status"),
+              col("screeningAnalysis_onfidoData_onfidoReports.uri").alias("screeningAnalysis_onfidoData_onfidoReports_uri")
+              ).drop("screeningAnalysis_onfidoData_onfidoReports")
+
+explode_with_SAonfidoChecks = expanded_df8.withColumn('screeningAnalysis_onfidoData_onfidoChecks',explode_outer('screeningAnalysis_onfidoData_onfidoChecks'))
+
+expanded_df9 = explode_with_SAonfidoChecks.select(
+              col("*"),
+              col("screeningAnalysis_onfidoData_onfidoChecks.applicantId").alias("screeningAnalysis_onfidoData_onfidoChecks_applicantId"),
+              col("screeningAnalysis_onfidoData_onfidoChecks.createdAt").alias("screeningAnalysis_onfidoData_onfidoChecks_createdAt"),
+              col("screeningAnalysis_onfidoData_onfidoChecks.href").alias("screeningAnalysis_onfidoData_onfidoChecks_href"),
+              col("screeningAnalysis_onfidoData_onfidoChecks.id").alias("screeningAnalysis_onfidoData_onfidoChecks_id"),
+              col("screeningAnalysis_onfidoData_onfidoChecks.resultsUri").alias("screeningAnalysis_onfidoData_onfidoChecks_resultsUri"),
+              col("screeningAnalysis_onfidoData_onfidoChecks.status").alias("screeningAnalysis_onfidoData_onfidoChecks_status"),
+              col("screeningAnalysis_onfidoData_onfidoChecks.reportIds").alias("screeningAnalysis_onfidoData_onfidoChecks_reportIds")
+              ).drop("screeningAnalysis_onfidoData_onfidoChecks")
+
+explode_with_SAonfidoChecksreportIds = expanded_df9.withColumn('screeningAnalysis_onfidoData_onfidoChecks_reportIds',explode_outer('screeningAnalysis_onfidoData_onfidoChecks_reportIds'))
+
+expanded_df10 = explode_with_SAonfidoChecksreportIds.select(
+              col("*"),
+              col("screeningAnalysis_onfidoData_onfidoChecks_reportIds.0").alias("screeningAnalysis_onfidoData_onfidoChecks_reportIds_0"),
+              col("screeningAnalysis_onfidoData_onfidoChecks_reportIds.1").alias("screeningAnalysis_onfidoData_onfidoChecks_reportIds_1")
+              ).drop("screeningAnalysis_onfidoData_onfidoChecks_reportIds")
+
+expanded_df_dedup = expanded_df10.dropDuplicates()
+finaldf_dyn = DynamicFrame.fromDF(expanded_df_dedup, glueContext, "finaldf_dyn")
+finaldf = finaldf_dyn.resolveChoice(specs = [
+    ("blocked", "cast:boolean"),
+    ("eddFlag", "cast:boolean"),
+    ("informedConsent", "cast:boolean"),
+    ("revision", "cast:long"),
+    ("screeningAnalysis_faceInfo_confidence", "cast:long"),
+    ("screeningAnalysis_faceSimilarityInfoList_faceInfo_confidence", "cast:long"),
+    ("screeningAnalysis_faceSimilarityInfoList_similarity", "cast:long"),
+    ("screeningAnalysis_faceSimilarityInfoList_similarity", "cast:long"),
+    ("userInfo_age", "cast:long"),
+    ("userInfo_monthToExpire", "cast:long"),
+    ("version", "cast:long"),
+    ("screeningAnalysis_components_data_mrz", "cast:null")
+])
+
+date_folder = datetime.today().strftime('%Y-%m-%d')
+#csv_output_dir = output_dir_present + '/' + 'csv' + '/' + date_folder + '/'
+parquet_output_dir = output_dir_present + '/' + 'parquet' + '/' + date_folder + '/'
+
+# Write to S3 in CSV
+#datasink_csv = glueContext.write_dynamic_frame.from_options(frame = finaldf, connection_type = "s3", connection_options = {"path": csv_output_dir}, format = "csv", transformation_ctx = "datasink_csv")
+
+# Write to S3 in Parquet
+datasink_parquet = glueContext.write_dynamic_frame.from_options(frame = finaldf, connection_type = "s3", connection_options = {"path": parquet_output_dir}, format = "parquet", transformation_ctx = "datasink_parquet")
+
+job.commit()
